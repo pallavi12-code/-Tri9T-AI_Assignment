@@ -374,3 +374,34 @@ class VersionCompare(BaseModel):
     valid: bool
 
     warnings: list
+from pydantic import BaseModel
+
+from datetime import datetime
+
+
+
+class VersionCreate(BaseModel):
+
+    document_id: str
+
+    content: str
+
+
+
+class VersionResponse(BaseModel):
+
+    document_id: str
+
+    version: int
+
+    created_at: datetime
+
+
+
+class CompareResponse(BaseModel):
+
+    added: list
+
+    removed: list
+
+    changed: list
