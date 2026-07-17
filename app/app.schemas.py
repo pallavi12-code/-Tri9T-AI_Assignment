@@ -355,7 +355,22 @@ class Heading(BaseModel):
 class DocumentResponse(BaseModel):
 
     headings: List[Heading]
+from pydantic import BaseModel
 
+
+class VersionCreate(BaseModel):
+
+    document_id: str
+
+    content: str
+
+
+
+class VersionCompare(BaseModel):
+
+    old_version: int
+
+    new_version: int
     valid: bool
 
     warnings: list
