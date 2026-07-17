@@ -170,3 +170,18 @@ Pytest is used as the testing framework.
 * Authentication
 * Docker support
 * Cloud deployment
+# Decision Log
+
+## 1. What part of this system is most likely to silently give wrong results without erroring? How would you catch it?
+
+The heading extraction/parser layer is the most likely component to silently produce incorrect results because PDFs have inconsistent formatting and a heading may be interpreted as normal text or vice versa. I would catch this using validation rules, unit tests with different document structures, and manual comparison of extracted headings against sample PDFs.
+
+---
+
+## 2. Where did you choose simplicity over correctness because of time? What would break first in production?
+I chose a lightweight rule-based heading parser and simplified version comparison instead of implementing a more advanced document understanding model. In production, the parser would be the first component to fail on complex PDFs with tables, images, unusual layouts, or inconsistent heading styles.
+
+---
+
+## 3. Name one input you did not handle, and what your system does when it sees it.
+One input I did not fully handle is scanned PDFs containing only images without selectable text. Currently, the PDF extraction step returns empty text or incomplete content. A production system would need OCR support before sending the document to the parser.
