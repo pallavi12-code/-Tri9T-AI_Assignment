@@ -68,8 +68,96 @@ documents = {}
 # Parse Text Document
 # -----------------------------
 
+@router.post("/compare")
+def compare_versions(
 
-@router.post("/parse")
+        document_id:str,
+
+        old_version:int,
+
+        new_version:int,
+
+        db: Session = Depends(get_db)
+
+):
+
+
+    old_doc = (
+
+        db.query(DocumentVersion)
+
+        .filter(
+
+            DocumentVersion.document_id
+            ==
+            document_id,
+
+            DocumentVersion.version
+            ==
+            old_version
+
+        )
+
+        .first()
+
+    )
+
+
+    new_doc = (
+
+        db.query(DocumentVersion)
+
+        .filter(
+
+            DocumentVersion.document_id
+            ==
+            document_id,
+
+            DocumentVersion.version
+            ==
+            new_version
+
+        )
+
+        .first()
+
+    )
+
+
+    if not old_doc or not new_doc:
+
+        raise HTTPException(
+
+            status_code=404,
+
+            detail="Version not found"
+
+        )
+
+
+
+    old_headings = parser.extract_headings(
+
+        old_doc.content
+
+    )
+
+
+    new_headings = parser.extract_headings(
+
+        new_doc.content
+
+    )
+
+
+
+    return version_manager.compare(
+
+        old_headings,
+
+        new_headings
+
+    )
 def parse_document(
         request: DocumentRequest
 ):
