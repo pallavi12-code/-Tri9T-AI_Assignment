@@ -29,7 +29,52 @@ from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+from sqlalchemy import (
+    Column,
+    Integer,
+    String,
+    Text,
+    DateTime
+)
 
+from datetime import datetime
+
+from app.database import Base
+
+
+
+class DocumentVersion(Base):
+
+    __tablename__ = "document_versions"
+
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+
+    document_id = Column(
+        String,
+        index=True
+    )
+
+
+    version = Column(
+        Integer
+    )
+
+
+    content = Column(
+        Text
+    )
+
+
+    created_at = Column(
+        DateTime,
+        default=datetime.utcnow
+    )
 
 class MatchType(str, enum.Enum):
     """Classification of how a node relates across two document versions."""
@@ -319,3 +364,49 @@ class QAReference(Base):
             f"QAReference(id={self.id!r}, selection_id={self.selection_id!r}, "
             f"is_stale={self.is_stale!r})"
         )
+from sqlalchemy import (
+    Column,
+    Integer,
+    String,
+    Text,
+    DateTime
+)
+
+from datetime import datetime
+
+from app.database import Base
+
+
+
+class DocumentVersion(Base):
+
+    __tablename__ = "document_versions"
+
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+
+    document_id = Column(
+        String,
+        index=True
+    )
+
+
+    version = Column(
+        Integer
+    )
+
+
+    content = Column(
+        Text
+    )
+
+
+    created_at = Column(
+        DateTime,
+        default=datetime.utcnow
+    )
