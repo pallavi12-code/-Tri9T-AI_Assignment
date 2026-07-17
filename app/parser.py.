@@ -1088,3 +1088,34 @@ class DocumentVersionManager:
 
 
         return summary
+tests/test_parser.pyfrom app.parser import DocumentParser
+
+
+
+def test_heading_extraction():
+
+
+    text = """
+INTRODUCTION
+
+Background:
+
+Machine Learning Basics
+
+"""
+
+
+    parser = DocumentParser()
+
+
+    result = parser.extract_headings(text)
+
+
+    assert len(result) > 0
+
+
+    assert result[0]["title"] == "INTRODUCTION"
+
+
+    assert result[0]["level"] == 1source venv/bin/activate
+pytest tests/test_parser.py
