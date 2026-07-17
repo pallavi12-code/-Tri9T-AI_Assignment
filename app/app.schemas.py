@@ -333,3 +333,29 @@ class Pagination(BaseModel):
 class PaginatedNodes(BaseModel):
     pagination: Pagination
     items: list[NodeSummary]
+from pydantic import BaseModel
+from typing import List
+
+
+
+class DocumentRequest(BaseModel):
+
+    text: str
+
+
+
+class Heading(BaseModel):
+
+    title: str
+
+    level: int
+
+
+
+class DocumentResponse(BaseModel):
+
+    headings: List[Heading]
+
+    valid: bool
+
+    warnings: list
