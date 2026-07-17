@@ -1,4 +1,42 @@
 """
+Common utility functions.
+"""
+
+
+def create_heading(title, level):
+    """
+    Helper to generate heading objects.
+
+    Used in tests.
+    """
+
+    return {
+        "title": title,
+        "level": level
+    }
+
+
+
+def create_sample_document():
+
+    return [
+
+        create_heading(
+            "Introduction",
+            1
+        ),
+
+        create_heading(
+            "Background",
+            2
+        ),
+
+        create_heading(
+            "Conclusion",
+            1
+        )
+
+    ]"""
 Utility functions for the Tri9T AI Engineering Internship project.
 
 Shared helpers for:
