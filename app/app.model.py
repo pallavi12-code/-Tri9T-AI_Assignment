@@ -410,3 +410,73 @@ class DocumentVersion(Base):
         DateTime,
         default=datetime.utcnow
     )
+"""
+Database models for CT200 project.
+"""
+
+from sqlalchemy import (
+    Column,
+    Integer,
+    String,
+    Text,
+    DateTime
+)
+
+from datetime import datetime
+
+from app.database import Base
+
+
+
+class DocumentVersion(Base):
+
+    __tablename__ = "document_versions"
+
+
+    id = Column(
+
+        Integer,
+
+        primary_key=True,
+
+        index=True
+
+    )
+
+
+    document_id = Column(
+
+        String,
+
+        index=True,
+
+        nullable=False
+
+    )
+
+
+    version = Column(
+
+        Integer,
+
+        nullable=False
+
+    )
+
+
+    content = Column(
+
+        Text,
+
+        nullable=False
+
+    )
+
+
+    created_at = Column(
+
+        DateTime,
+
+        default=datetime.utcnow
+
+    )
