@@ -1,0 +1,1090 @@
+"""
+app/parser.py
+
+CT-200 PDF Parser
+
+Responsible for:
+
+- Loading the PDF
+- Extracting text blocks
+- Preserving reading order
+- Preparing blocks for hierarchy reconstruction
+- Creating parser metadata
+
+Hierarchy reconstruction and database persistence
+are implemented in later sections.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import fitz  # PyMuPDF
+from sqlalchemy.orm import Session
+
+from app.models import Document, DocumentVersion
+from app.utils import (
+    compute_content_hash,
+    normalize_heading,
+    normalize_text,
+)
+
+logger = logging.getLogger(__name__)
+
+
+# ============================================================
+# Data Classes
+# ============================================================
+
+
+@dataclass(slots=True)
+class TextBlock:
+    """
+    Represents one extracted block from the PDF.
+    """
+
+    page: int
+    text: str
+    bbox: tuple[float, float, float, float]
+    font_size: float
+    font_name: str
+    is_bold: bool
+
+
+@dataclass(slots=True)
+class ParsedPage:
+    """
+    Represents one parsed page.
+    """
+
+    page_number: int
+    blocks: list[TextBlock]
+
+
+# ============================================================
+# Parser
+# ============================================================
+
+
+class CT200Parser:
+    """
+    Specialized parser for the CT-200 manuals.
+
+    This parser intentionally targets the
+    formatting characteristics of the CT-200 PDFs
+    rather than attempting to support arbitrary PDFs.
+    """
+
+    def __init__(
+        self,
+        pdf_path: str | Path,
+        db: Session,
+    ) -> None:
+
+        self.pdf_path = Path(pdf_path)
+        self.db = db
+
+        self.document: fitz.Document | None = None
+
+        self.pages: list[ParsedPage] = []
+
+        logger.info("Parser initialized for %s", self.pdf_path)
+
+    # ========================================================
+    # PDF Loading
+    # ========================================================
+
+    def open(self) -> None:
+        """
+        Open PDF using PyMuPDF.
+        """
+
+        if not self.pdf_path.exists():
+            raise FileNotFoundError(self.pdf_path)
+
+        self.document = fitz.open(self.pdf_path)
+
+        logger.info(
+            "Opened PDF with %d pages",
+            self.document.page_count,
+        )
+
+    def close(self) -> None:
+        """
+        Close PDF.
+        """
+
+        if self.document:
+            self.document.close()
+
+    # ========================================================
+    # Metadata
+    # ========================================================
+
+    def document_title(self) -> str:
+        """
+        Read document title.
+
+        Falls back to filename.
+        """
+
+        if self.document is None:
+            raise RuntimeError("PDF not opened.")
+
+        meta = self.document.metadata
+
+        title = meta.get("title")
+
+        if title:
+            return normalize_text(title)
+
+        return self.pdf_path.stem
+
+    # ========================================================
+    # Extraction
+    # ========================================================
+
+    def extract_pages(self) -> list[ParsedPage]:
+        """
+        Extract all text blocks while preserving
+        reading order.
+        """
+
+        if self.document is None:
+            raise RuntimeError("PDF not opened.")
+
+        parsed_pages: list[ParsedPage] = []
+
+        for page_index, page in enumerate(self.document):
+
+            blocks: list[TextBlock] = []
+
+            data = page.get_text("dict")
+
+            for block in data["blocks"]:
+
+                if "lines" not in block:
+                    continue
+
+                text_parts: list[str] = []
+
+                font_size = 0.0
+                font_name = ""
+
+                bold = False
+
+                for line in block["lines"]:
+
+                    for span in line["spans"]:
+
+                        value = span["text"].strip()
+
+                        if not value:
+                            continue
+
+                        text_parts.append(value)
+
+                        font_size = max(
+                            font_size,
+                            span["size"],
+                        )
+
+                        font_name = span["font"]
+
+                        if "Bold" in span["font"]:
+                            bold = True
+
+                text = normalize_text(" ".join(text_parts))
+
+                if not text:
+                    continue
+
+                blocks.append(
+                    TextBlock(
+                        page=page_index + 1,
+                        text=text,
+                        bbox=tuple(block["bbox"]),
+                        font_size=font_size,
+                        font_name=font_name,
+                        is_bold=bold,
+                    )
+                )
+
+            parsed_pages.append(
+                ParsedPage(
+                    page_number=page_index + 1,
+                    blocks=blocks,
+                )
+            )
+
+        self.pages = parsed_pages
+
+        logger.info(
+            "Extracted %d pages",
+            len(parsed_pages),
+        )
+
+        return parsed_pages
+
+    # ========================================================
+    # Helpers
+    # ========================================================
+
+    def total_pages(self) -> int:
+
+        if self.document is None:
+            return 0
+
+        return self.document.page_count
+
+    def total_blocks(self) -> int:
+
+        return sum(
+            len(page.blocks)
+            for page in self.pages
+        )
+
+    def all_blocks(self) -> list[TextBlock]:
+        """
+        Flatten every page into one ordered list.
+        """
+
+        blocks: list[TextBlock] = []
+
+        for page in self.pages:
+            blocks.extend(page.blocks)
+
+        return blocks
+
+    # ========================================================
+    # Placeholder methods
+    # ========================================================
+
+    def detect_headings(self):
+        """
+        Implemented in Part 2.
+        """
+        raise NotImplementedError
+
+    def build_tree(self):
+        """
+        Implemented in Part 3.
+        """
+        raise NotImplementedError
+
+    def persist(self):
+        """
+        Implemented in Part 3.
+        """
+        raise NotImplementedError
+# ========================================================
+# Heading Detection
+# ========================================================
+
+    def detect_headings(self) -> list[dict[str, Any]]:
+        """
+        Detect headings using multiple heuristics.
+
+        Unlike a generic parser, this logic is tuned for the CT-200
+        manuals and intentionally combines typography with textual
+        patterns instead of relying on only font size.
+
+        Returns
+        -------
+        List[dict]
+            Each dictionary contains metadata describing one heading.
+        """
+
+        if not self.pages:
+            raise RuntimeError("Pages have not been extracted.")
+
+        heading_candidates: list[dict[str, Any]] = []
+
+        blocks = self.all_blocks()
+
+        if not blocks:
+            return heading_candidates
+
+        # Build statistics for adaptive thresholds
+        font_sizes = sorted({b.font_size for b in blocks})
+
+        max_font = max(font_sizes)
+        min_font = min(font_sizes)
+
+        logger.info(
+            "Detected font size range %.1f - %.1f",
+            min_font,
+            max_font,
+        )
+
+        for index, block in enumerate(blocks):
+
+            text = normalize_text(block.text)
+
+            if not text:
+                continue
+
+            score = 0
+
+            # --------------------------------------------------
+            # Typography
+            # --------------------------------------------------
+
+            if block.is_bold:
+                score += 2
+
+            if block.font_size >= max_font:
+                score += 3
+
+            elif block.font_size >= max_font - 1:
+                score += 2
+
+            elif block.font_size >= max_font - 2:
+                score += 1
+
+            # --------------------------------------------------
+            # Numbered headings
+            # --------------------------------------------------
+
+            if self._looks_numbered(text):
+                score += 3
+
+            # --------------------------------------------------
+            # Very short lines are likely headings
+            # --------------------------------------------------
+
+            words = len(text.split())
+
+            if words <= 8:
+                score += 1
+
+            # --------------------------------------------------
+            # Sentences ending with "." usually aren't headings
+            # --------------------------------------------------
+
+            if text.endswith("."):
+                score -= 2
+
+            # --------------------------------------------------
+            # Store candidate
+            # --------------------------------------------------
+
+            if score >= 3:
+
+                heading_candidates.append(
+                    {
+                        "index": index,
+                        "text": text,
+                        "normalized": normalize_heading(text),
+                        "font_size": block.font_size,
+                        "page": block.page,
+                        "score": score,
+                        "bbox": block.bbox,
+                    }
+                )
+
+        logger.info(
+            "Detected %d heading candidates",
+            len(heading_candidates),
+        )
+
+        return heading_candidates
+
+    # ========================================================
+    # Hierarchy Reconstruction
+    # ========================================================
+
+    def reconstruct_hierarchy(
+        self,
+        headings: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """
+        Reconstruct parent-child relationships.
+
+        Uses a stack-based hierarchy algorithm.
+
+        Handles:
+
+        - duplicate headings
+        - skipped heading levels
+        - out-of-order heading depths
+        """
+
+        hierarchy: list[dict[str, Any]] = []
+
+        stack: list[dict[str, Any]] = []
+
+        for heading in headings:
+
+            level = self._estimate_level(
+                heading["font_size"]
+            )
+
+            heading["level"] = level
+
+            while stack and stack[-1]["level"] >= level:
+                stack.pop()
+
+            if stack:
+                heading["parent"] = stack[-1]["normalized"]
+            else:
+                heading["parent"] = None
+
+            stack.append(heading)
+
+            hierarchy.append(heading)
+
+        logger.info(
+            "Hierarchy reconstructed (%d headings)",
+            len(hierarchy),
+        )
+
+        return hierarchy
+
+    # ========================================================
+    # Internal Helpers
+    # ========================================================
+
+    def _estimate_level(
+        self,
+        font_size: float,
+    ) -> int:
+        """
+        Estimate heading level from font size.
+
+        This intentionally uses coarse buckets rather than exact
+        values because PDFs often vary slightly between pages.
+        """
+
+        if font_size >= 18:
+            return 1
+
+        if font_size >= 16:
+            return 2
+
+        if font_size >= 14:
+            return 3
+
+        if font_size >= 12:
+            return 4
+
+        return 5
+
+    def _looks_numbered(
+        self,
+        text: str,
+    ) -> bool:
+        """
+        Detect numbered headings.
+
+        Examples:
+
+        1
+
+        2.1
+
+        3.4.5
+
+        Appendix A
+        """
+
+        import re
+
+        if re.match(r"^\d+(\.\d+)*", text):
+            return True
+
+        if text.lower().startswith("appendix"):
+            return True
+
+        return False
+
+    def validate_hierarchy(
+        self,
+        hierarchy: list[dict[str, Any]],
+    ) -> None:
+        """
+        Emit warnings for suspicious hierarchy jumps.
+        """
+
+        previous_level = 1
+
+        for heading in hierarchy:
+
+            level = heading["level"]
+
+            if level - previous_level > 1:
+
+                logger.warning(
+                    "Skipped heading level detected: %s",
+                    heading["text"],
+                )
+
+            previous_level = level
+# ========================================================
+# Tree Construction
+# ========================================================
+
+    def build_tree(
+        self,
+        hierarchy: list[dict[str, Any]],
+    ) -> list["Node"]:
+        """
+        Build SQLAlchemy Node objects from the reconstructed hierarchy.
+
+        This stage only builds the in-memory tree.
+        Database persistence happens later.
+        """
+
+        from app.models import Node
+
+        nodes: list[Node] = []
+
+        parent_lookup: dict[str, Node] = {}
+
+        order_counter = 1
+
+        for item in hierarchy:
+
+            heading = item["text"]
+            normalized = item["normalized"]
+
+            parent_heading = item["parent"]
+
+            parent_node = None
+
+            if parent_heading:
+                parent_node = parent_lookup.get(parent_heading)
+
+            structural_path = self._generate_structural_path(
+                parent_node,
+                order_counter,
+            )
+
+            node = Node(
+                version_id=0,  # Updated during persistence
+                parent=parent_node,
+                order_index=order_counter,
+                level=item["level"],
+                heading=heading,
+                content_text="",
+                content_hash="",
+                structural_path=structural_path,
+            )
+
+            nodes.append(node)
+
+            parent_lookup[normalized] = node
+
+            order_counter += 1
+
+        logger.info(
+            "Created %d in-memory nodes",
+            len(nodes),
+        )
+
+        return nodes
+
+# ========================================================
+# Attach Body Text
+# ========================================================
+
+    def attach_content(
+        self,
+        nodes: list["Node"],
+        hierarchy: list[dict[str, Any]],
+    ) -> None:
+        """
+        Attach paragraph content to every heading.
+
+        Every heading owns all text until the next heading.
+        """
+
+        blocks = self.all_blocks()
+
+        heading_lookup = {
+            item["index"]: node
+            for item, node in zip(hierarchy, nodes)
+        }
+
+        heading_indices = sorted(heading_lookup.keys())
+
+        for current, block_index in enumerate(heading_indices):
+
+            node = heading_lookup[block_index]
+
+            if current == len(heading_indices) - 1:
+                next_index = len(blocks)
+            else:
+                next_index = heading_indices[current + 1]
+
+            collected: list[str] = []
+
+            for block in blocks[block_index + 1 : next_index]:
+
+                text = normalize_text(block.text)
+
+                if not text:
+                    continue
+
+                collected.append(text)
+
+            node.content_text = "\n".join(collected)
+
+            node.content_hash = compute_content_hash(
+                node.heading + "\n" + node.content_text
+            )
+
+# ========================================================
+# Structural Path
+# ========================================================
+
+    def _generate_structural_path(
+        self,
+        parent,
+        order_index: int,
+    ) -> str:
+        """
+        Generate deterministic structural paths.
+
+        Examples
+
+        0001
+
+        0001/0002
+
+        0001/0002/0003
+        """
+
+        current = f"{order_index:04d}"
+
+        if parent is None:
+            return current
+
+        return f"{parent.structural_path}/{current}"
+
+# ========================================================
+# Root Detection
+# ========================================================
+
+    def find_root(
+        self,
+        nodes: list["Node"],
+    ):
+        """
+        Return the first top-level node.
+        """
+
+        for node in nodes:
+
+            if node.parent is None:
+                return node
+
+        return None
+
+# ========================================================
+# Statistics
+# ========================================================
+
+    def tree_statistics(
+        self,
+        nodes: list["Node"],
+    ) -> dict[str, int]:
+        """
+        Return lightweight parser statistics.
+        """
+
+        total = len(nodes)
+
+        roots = sum(
+            1 for n in nodes if n.parent is None
+        )
+
+        leaves = sum(
+            1 for n in nodes if len(n.children) == 0
+        )
+
+        return {
+            "total_nodes": total,
+            "root_nodes": roots,
+            "leaf_nodes": leaves,
+        }
+# app/parser.py
+# Part 3B - Persistence Layer
+
+from sqlalchemy.orm import Session
+from app.models import Document, Node
+
+
+class CT200Parser:
+
+    # existing Part 1, Part 2, Part 3A methods remain here
+
+
+    def save_document(
+        self,
+        db: Session,
+        filename: str,
+        metadata: dict,
+        root_nodes: list
+    ):
+        """
+        Persist parsed CT200 document and node hierarchy
+        into database.
+        """
+
+        document = Document(
+            filename=filename,
+            title=metadata.get("title", filename),
+            page_count=metadata.get("page_count", 0)
+        )
+
+        db.add(document)
+        db.flush()
+
+
+        for root in root_nodes:
+            self._save_node(
+                db=db,
+                node=root,
+                document_id=document.id,
+                parent_id=None
+            )
+
+
+        db.commit()
+
+        return document
+
+
+
+    def _save_node(
+        self,
+        db: Session,
+        node,
+        document_id: int,
+        parent_id=None
+    ):
+        """
+        Recursive node persistence.
+        """
+
+        db_node = Node(
+            document_id=document_id,
+            parent_id=parent_id,
+            title=node.title,
+            level=node.level,
+            node_type=node.node_type,
+            content=node.content,
+            structural_path=node.structural_path,
+            content_hash=node.content_hash
+        )
+
+        db.add(db_node)
+        db.flush()
+
+
+        for child in node.children:
+
+            self._save_node(
+                db=db,
+                node=child,
+                document_id=document_id,
+                parent_id=db_node.id
+            )
+
+
+        return db_node
+
+
+
+    def load_document_tree(
+        self,
+        db: Session,
+        document_id: int
+    ):
+        """
+        Retrieve stored document hierarchy.
+        """
+
+        root_nodes = (
+            db.query(Node)
+            .filter(
+                Node.document_id == document_id,
+                Node.parent_id == None
+            )
+            .all()
+        )
+
+        return root_nodes
+
+
+
+    def delete_document(
+        self,
+        db: Session,
+        document_id: int
+    ):
+        """
+        Remove document and all associated nodes.
+        """
+
+        nodes = (
+            db.query(Node)
+            .filter(
+                Node.document_id == document_id
+            )
+            .all()
+        )
+
+        for node in nodes:
+            db.delete(node)
+
+
+        document = (
+            db.query(Document)
+            .filter(
+                Document.id == document_id
+            )
+            .first()
+        )
+
+
+        if document:
+            db.delete(document)
+
+
+        db.commit()
+
+        return True
+"""
+versioning.py
+
+Handles CT200 document version management,
+comparison, and change detection.
+"""
+
+from datetime import datetime
+import hashlib
+from typing import List, Dict
+
+
+class DocumentVersionManager:
+    """
+    Maintains different versions of parsed documents
+    and detects structural/content changes.
+    """
+
+
+    def generate_hash(self, text: str) -> str:
+        """
+        Generate unique hash for content comparison.
+        """
+
+        if not text:
+            text = ""
+
+        return hashlib.sha256(
+            text.encode("utf-8")
+        ).hexdigest()
+
+
+
+    def create_version_record(
+        self,
+        document_id: int,
+        filename: str,
+        sections: list
+    ):
+        """
+        Creates metadata for a new document version.
+        """
+
+        version_hash = self.generate_hash(
+            "".join(
+                [
+                    section.content or ""
+                    for section in sections
+                ]
+            )
+        )
+
+
+        return {
+            "document_id": document_id,
+            "filename": filename,
+            "version_hash": version_hash,
+            "created_at": datetime.utcnow(),
+            "section_count": len(sections)
+        }
+
+
+
+    def compare_versions(
+        self,
+        old_sections: List,
+        new_sections: List
+    ) -> Dict:
+        """
+        Compare two parsed document trees.
+        """
+
+        old_map = self._create_section_map(
+            old_sections
+        )
+
+        new_map = self._create_section_map(
+            new_sections
+        )
+
+
+        changes = {
+
+            "added": [],
+            "removed": [],
+            "modified": []
+
+        }
+
+
+        # Detect added sections
+
+        for key in new_map:
+
+            if key not in old_map:
+
+                changes["added"].append(
+                    {
+                        "section": key,
+                        "content": new_map[key]
+                    }
+                )
+
+
+
+        # Detect removed sections
+
+        for key in old_map:
+
+            if key not in new_map:
+
+                changes["removed"].append(
+                    {
+                        "section": key,
+                        "content": old_map[key]
+                    }
+                )
+
+
+
+        # Detect modifications
+
+        for key in old_map:
+
+            if key in new_map:
+
+                old_hash = self.generate_hash(
+                    old_map[key]
+                )
+
+                new_hash = self.generate_hash(
+                    new_map[key]
+                )
+
+
+                if old_hash != new_hash:
+
+                    changes["modified"].append(
+                        {
+                            "section": key,
+                            "old_content": old_map[key],
+                            "new_content": new_map[key]
+                        }
+                    )
+
+
+        return changes
+
+
+
+    def _create_section_map(
+        self,
+        sections: list
+    ) -> Dict:
+        """
+        Convert tree structure into dictionary
+        for comparison.
+        """
+
+        section_map = {}
+
+
+        for section in sections:
+
+            path = getattr(
+                section,
+                "structural_path",
+                section.title
+            )
+
+
+            section_map[path] = (
+                section.content or ""
+            )
+
+
+            children = getattr(
+                section,
+                "children",
+                []
+            )
+
+
+            if children:
+
+                child_map = self._create_section_map(
+                    children
+                )
+
+                section_map.update(
+                    child_map
+                )
+
+
+        return section_map
+
+
+
+    def generate_change_summary(
+        self,
+        changes: Dict
+    ):
+        """
+        Generate human-readable report.
+        """
+
+        summary = {
+
+            "total_changes": (
+                len(changes["added"])
+                +
+                len(changes["removed"])
+                +
+                len(changes["modified"])
+            ),
+
+            "added_sections":
+                len(changes["added"]),
+
+            "removed_sections":
+                len(changes["removed"]),
+
+            "modified_sections":
+                len(changes["modified"])
+
+        }
+
+
+        return summary
