@@ -12,8 +12,8 @@ Handles:
 class DocumentValidator:
 
     def __init__(self):
-        self.errors = []
-        self.warnings = []
+        self.errors: list[str] = []
+        self.warnings: list[str] = []
 
 
     def validate(self, headings):
@@ -60,7 +60,7 @@ class DocumentValidator:
 
         for heading in headings:
 
-            title = heading["title"].strip().lower()
+            title = str(heading["title"]).strip().lower()
 
             if title in seen:
 
