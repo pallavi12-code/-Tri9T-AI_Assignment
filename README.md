@@ -1,145 +1,84 @@
-# CT200 Document Parser & Versioning API
+# CT200 Document Parser API
 
-A Python/FastAPI document-processing system that extracts document structure, validates heading hierarchy, and tracks document versions and changes.
-
-> Originally developed for an AI engineering internship assignment; the repository is presented here as a standalone engineering project.
-
-## What it does
-
-### Document parsing
-- Accepts PDF/text content for processing
-- Extracts document text and structural headings
-- Represents detected headings as structured JSON
-
-### Structure validation
-Checks for:
-- Duplicate headings
-- Incorrect heading hierarchy
-- Skipped heading levels
-
-Example:
-
-```text
-H1
- └── H2
-      └── H3    valid
-
-H1
- └── H3         warning: skipped level
-```
-
-### Version management
-The application stores document versions and supports change comparison, including added, removed, and changed headings.
-
-### REST API
-
-| Endpoint | Purpose |
-|---|---|
-| `/api/parse` | Parse document content and return structure |
-| `/api/versions` | Create/manage document versions |
-| `/api/versions/{id}` | Retrieve version history |
-| `/api/compare` | Compare document versions |
+This FastAPI service extracts headings from plain text and text-based PDFs,
+reports heading validation warnings, and stores document versions in SQLite for
+heading-level comparison.
 
 ## Architecture
 
-```text
-Document
-   ↓
-Text extraction
-   ↓
-Heading parser
-   ↓
-Optional LLM-assisted structure extraction
-   ↓
-Validation
-   ↓
-Version manager
-   ↓
-SQLite / SQLAlchemy
-   ↓
-FastAPI
-```
+Requests enter `app/main.py` and are routed through `app/routes.py`. The
+`DocumentParser` extracts numbered, title-case, and uppercase headings.
+`DocumentValidator` reports duplicate headings and skipped levels. Versions
+are persisted with SQLAlchemy through a request-scoped session dependency, and
+`VersionManager` compares their extracted heading structures.
 
-## Repository structure
-
-```text
-.
-├── app/
-│   ├── database.py
-│   ├── models.py
-│   ├── parser.py
-│   ├── validator.py
-│   ├── versioning.py
-│   ├── llm.py
-│   ├── routes.py
-│   ├── schemas.py
-│   ├── utils.py
-│   └── main.py
-├── tests/
-├── requirements.txt
-├── approach.md
-└── README.md
-```
-
-## Run locally
+## Setup and run
 
 ```bash
-git clone https://github.com/pallavi12-code/-Tri9T-AI_Assignment.git
-cd -Tri9T-AI_Assignment
 python -m venv .venv
-source .venv/bin/activate       # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+python -m pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
-API documentation is available at `http://127.0.0.1:8000/docs` while the server is running.
+The API is available at `http://127.0.0.1:8000`; interactive documentation is
+at `/docs`. Set `DATABASE_URL` to use another SQLAlchemy-supported database.
 
-## Tests
+## Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/` | Service status |
+| GET | `/health` | Health status |
+| POST | `/api/parse` | Parse JSON text into headings and validation results |
+| POST | `/api/upload` | Parse an uploaded text-based PDF |
+| POST | `/api/versions` | Create the next version for a document |
+| GET | `/api/versions/{document_id}` | List stored versions |
+| POST | `/api/compare?document_id=...&old_version=1&new_version=2` | Compare two stored versions |
+
+Invalid file types return `415`, malformed PDFs return `400`, PDFs without
+extractable text return `422`, missing versions return `404`, and invalid
+request bodies return FastAPI's standard `422` response.
+
+## Examples
+
+Parse text:
 
 ```bash
-pytest
+curl -X POST http://127.0.0.1:8000/api/parse \
+  -H 'content-type: application/json' \
+  -d '{"text":"INTRODUCTION\n1. Background\nDetails"}'
 ```
 
-## Example parse request
-
-```json
-{
-  "text": "INTRODUCTION\nMachine Learning Overview"
-}
-```
-
-Example structured response:
+Response:
 
 ```json
 {
   "headings": [
-    {"title": "INTRODUCTION", "level": 1}
+    {"title": "INTRODUCTION", "level": 1},
+    {"title": "Background", "level": 1}
   ],
   "valid": true,
   "warnings": []
 }
 ```
 
-## Tech stack
+Create and compare versions:
 
-- Python
-- FastAPI
-- SQLAlchemy
-- SQLite
-- Pydantic
-- PyPDF
-- Pytest
-- Optional LLM integration
+```bash
+curl -X POST http://127.0.0.1:8000/api/versions \
+  -H 'content-type: application/json' \
+  -d '{"document_id":"manual-1","content":"INTRODUCTION"}'
+curl -X POST http://127.0.0.1:8000/api/versions \
+  -H 'content-type: application/json' \
+  -d '{"document_id":"manual-1","content":"INTRODUCTION\nCONCLUSION"}'
+curl -X POST 'http://127.0.0.1:8000/api/compare?document_id=manual-1&old_version=1&new_version=2'
+```
 
-## Future improvements
+## Testing
 
-- Add authentication and authorization
-- Add PostgreSQL support
-- Containerize the API
-- Add broader document-format support
-- Add deployment and observability
+```bash
+python -m pytest -q
+```
 
-## Author
-
-**Pallavi Reddy**  
-Artificial Intelligence & Machine Learning Engineering Student, CBIT
+GitHub Actions runs the same test command after installing `requirements.txt`.

@@ -1,113 +1,26 @@
-"""
-Document version management.
-
-Handles:
-- creating versions
-- comparing versions
-- tracking changes
-"""
+"""Document version numbering and heading comparison."""
 
 
 class VersionManager:
+    """Compare parsed heading structures and calculate next versions."""
 
+    @staticmethod
+    def create_version(old_versions: list[int]) -> int:
+        return max(old_versions, default=0) + 1
 
-
-    def create_version(
-        self,
-        old_versions
-    ):
-
-        """
-        Generates next version number.
-        """
-
-
-        if not old_versions:
-
-            return 1
-
-
-        latest = max(
-            old_versions
-        )
-
-
-        return latest + 1
-
-
-
+    @staticmethod
     def compare(
-        self,
-        old_headings,
-        new_headings
-    ):
-
-
-        old_map = {
-
-            h["title"]:
-            h["level"]
-
-            for h in old_headings
-        }
-
-
-
-        new_map = {
-
-            h["title"]:
-            h["level"]
-
-            for h in new_headings
-        }
-
-
-
-        added = []
-
-        removed = []
-
-        changed = []
-
-
-
-        for title in new_map:
-
-
-            if title not in old_map:
-
-                added.append(title)
-
-
-
-            elif old_map[title] != new_map[title]:
-
-                changed.append(
-                    title
-                )
-
-
-
-        for title in old_map:
-
-
-            if title not in new_map:
-
-                removed.append(title)
-
-
-
+        old_headings: list[dict[str, int | str]],
+        new_headings: list[dict[str, int | str]],
+    ) -> dict[str, list[str]]:
+        old_map = {str(item["title"]): item["level"] for item in old_headings}
+        new_map = {str(item["title"]): item["level"] for item in new_headings}
         return {
-
-            "added":
-            added,
-
-
-            "removed":
-            removed,
-
-
-            "changed":
-            changed
-
-        }v
+            "added": [title for title in new_map if title not in old_map],
+            "removed": [title for title in old_map if title not in new_map],
+            "changed": [
+                title
+                for title in new_map
+                if title in old_map and old_map[title] != new_map[title]
+            ],
+        }
